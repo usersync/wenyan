@@ -2,6 +2,19 @@
     <img alt = "logo" src="Data/256-mac.png" />
 </div>
 
+## 最新更新
+
+**新增GitHub图床功能**
+
+现在你可以通过「文颜」将本地图片上传到GitHub仓库作为图床使用。
+
+### 使用方法
+1. 在设置中选择"GitHub"图床选项
+2. 填写你的GitHub Token、仓库名称(格式: username/repo)、分支名称(默认为main)和存储路径(可选)
+3. 启用GitHub图床功能
+
+[查看详细文档](https://yuzhi.tech/docs/wenyan/upload)
+
 **文颜`Windows`版已开源，[请戳](https://github.com/caol64/wenyan-pc)。**
 
 # 文颜

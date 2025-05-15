@@ -16,6 +16,8 @@ class UploaderFactory {
         switch config {
         case let gzhConfig as GzhImageHost:
             return GzhUploader(config: gzhConfig)
+        case let githubConfig as GitHubImageHost:
+            return GitHubUploader(config: githubConfig)
         default:
             return nil
         }

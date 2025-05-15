@@ -123,14 +123,16 @@ enum EditorMode {
 
 enum Settings: Identifiable, Hashable {
     enum ImageHosts: String, CaseIterable, Identifiable {
-        case gzh = "公众号图床"
-        
-        var id: String {
-            switch self {
-            case .gzh: "gzh"
-            }
+    case gzh = "公众号图床"
+    case github = "GitHub图床"
+    
+    var id: String {
+        switch self {
+        case .gzh: "gzh"
+        case .github: "github"
         }
     }
+}
     
     case imageHosts(ImageHosts)
     case codeblock

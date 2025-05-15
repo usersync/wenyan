@@ -8,6 +8,10 @@
 import SwiftUI
 import WebKit
 
+enum TimeoutError: Error {
+    case timedOut
+}
+
 struct MarkdownView: NSViewRepresentable {
     @EnvironmentObject var viewModel: MarkdownViewModel
     
@@ -192,14 +196,66 @@ extension MarkdownViewModel {
                         onFileUploadFailed()
                     }
                 } catch {
-                    self.appState.appError = AppError.bizError(description: error.localizedDescription)
+                    self.appState.appError = AppError.bizError(description: "公众号图床上传失败: \(error.localizedDescription)")
                     onFileUploadFailed()
                 }
             } else {
-                appState.appError = AppError.bizError(description: "图床配置错误")
+                appState.appError = AppError.bizError(description: "公众号图床配置错误")
+                onFileUploadFailed()
+            }
+        } else if enabled == Settings.ImageHosts.github.id {
+            guard let savedData = UserDefaults.standard.data(forKey: "githubImageHost"),
+                  let githubImageHost = try? JSONDecoder().decode(GitHubImageHost.self, from: savedData) else {
+                appState.appError = AppError.bizError(description: "GitHub 图床未配置，请在设置中检查配置。")
+                onFileUploadFailed()
+                return
+            }
+            if let uploader = UploaderFactory.createUploader(config: githubImageHost) {
+                do {
+                    let urlString: String? = try await withThrowingTaskGroup(of: String?.self, returning: String?.self) { group in
+                        // Upload task
+                        group.addTask {
+                            return try await uploader.upload(fileData: fileData, fileName: fileName, mimeType: mimeType)
+                        }
+
+                        // Timeout task
+                        group.addTask {
+                            try await Task.sleep(nanoseconds: 20_000_000_000) // 20 seconds
+                            throw TimeoutError.timedOut
+                        }
+
+                        // Await the first task to complete or throw.
+                        // If upload completes first, its result is returned.
+                        // If timeout completes first (throws TimeoutError), that error is propagated.
+                        // If upload throws another error, that error is propagated.
+                        let firstResult = try await group.next()
+                        group.cancelAll() // Cancel the other task (timeout or upload if one finished)
+                        return firstResult.flatMap { $0 }
+                    }
+
+                    if let validUrl = urlString {
+                        onFileUploadComplete(validUrl)
+                    } else {
+                        // This case handles if uploader.upload itself returns nil without throwing an error
+                        appState.appError = AppError.bizError(description: "GitHub 图床上传失败，未返回有效URL。请检查配置和网络。")
+                        onFileUploadFailed()
+                    }
+                } catch is TimeoutError { // Catches TimeoutError thrown from the group
+                    appState.appError = AppError.bizError(description: "GitHub 图床上传超时 (20秒)。请检查网络连接或仓库设置。")
+                    onFileUploadFailed()
+                } catch let error as NSError where error.domain == NSURLErrorDomain && error.code == NSURLErrorTimedOut {
+                    appState.appError = AppError.bizError(description: "GitHub 图床上传超时。请检查您的网络连接。可能的原因：网络不稳定、GitHub API响应慢。")
+                    onFileUploadFailed()
+                } catch {
+                    var errorMessage = "GitHub 图床上传失败: \(error.localizedDescription)"
+                    errorMessage += "\n\n可能的原因：\n1. GitHub Token 无效或权限不足。\n2. 仓库配置错误（名称、分支、路径）。\n3. 网络连接问题或防火墙限制。\n4. 文件名包含特殊字符。"
+                    self.appState.appError = AppError.bizError(description: errorMessage)
+                    onFileUploadFailed()
+                }
+            } else {
+                appState.appError = AppError.bizError(description: "GitHub 图床配置错误，无法创建上传器。")
                 onFileUploadFailed()
             }
         }
     }
-
 }

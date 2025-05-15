@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AppKit // 用于NSImage图片处理
 
 struct SettingsView: View {
     @State private var selectedTab: Settings? = .imageHosts(.gzh)
@@ -71,6 +72,8 @@ struct SettingsContent: View {
             case .imageHosts(let imageHost):
                 if imageHost == .gzh {
                     GzhImageHostSettingsView()
+                } else if imageHost == .github {
+                    GitHubImageHostSettingsView()
                 }
             case .codeblock:
                 CodeblockSettingsView()
@@ -104,6 +107,201 @@ struct CardView<Content: View>: View {
             .background(Color(nsColor: .windowBackgroundColor))
             .cornerRadius(10)
             .shadow(radius: 3)
+    }
+}
+
+// GitHub图床设置视图
+struct GitHubImageHostSettingsView: View {
+    @StateObject private var viewModel = GitHubImageHostSettingsViewModel()
+    @State private var testResult: String? = nil
+    @State private var isTesting = false
+    @State private var selectedTestImage: NSImage? = nil
+    @State private var showLogWindow = false
+    @State private var logMessages: [String] = []
+
+    var body: some View {
+        VStack(alignment: .leading) {
+            HStack {
+                Text(Settings.ImageHosts.github.rawValue)
+                    .font(.title2)
+                    .bold()
+                Spacer()
+                Toggle("", isOn: $viewModel.isEnabled)
+                    .toggleStyle(.switch)
+            }
+            
+            CardView {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("GitHub Token")
+                        .bold()
+                    TextField("请输入GitHub Token", text: $viewModel.githubImageHost.token)
+                        .textFieldStyle(.roundedBorder)
+                        .padding(.bottom, 8)
+                    
+                    Text("仓库名称")
+                        .bold()
+                    TextField("如：username/repo", text: $viewModel.githubImageHost.repo)
+                        .textFieldStyle(.roundedBorder)
+                        .padding(.bottom, 8)
+                    
+                    Text("分支名称")
+                        .bold()
+                    TextField("默认为main", text: $viewModel.githubImageHost.branch)
+                        .textFieldStyle(.roundedBorder)
+                        .padding(.bottom, 8)
+                    
+                    Text("存储路径")
+                        .bold()
+                    TextField("可选，如：images", text: $viewModel.githubImageHost.path)
+                        .textFieldStyle(.roundedBorder)
+                        .padding(.bottom, 8)
+                    
+                    HStack {
+                        Button("选择测试图片") {
+                            let openPanel = NSOpenPanel()
+                            openPanel.allowedContentTypes = [.png, .jpeg]
+                            if openPanel.runModal() == .OK {
+                                if let nsImage = NSImage(contentsOf: openPanel.url!) {
+                                    selectedTestImage = nsImage
+                                }
+                            }
+                        }
+                        
+                        if let image = selectedTestImage {
+                            Text("已选择: \(image)")
+                                .font(.caption)
+                        }
+                    }
+                    
+                    Button(action: testConnection) {
+                        HStack {
+                            if isTesting {
+                                ProgressView()
+                            }
+                            Text("测试连接")
+                        }
+                    }
+                    .disabled(isTesting || selectedTestImage == nil)
+                    
+                    Button("查看日志") {
+                        showLogWindow = true
+                    }
+                    .disabled(logMessages.isEmpty)
+                    
+                    Button("保存配置") {
+                        viewModel.saveSettings()
+                    }
+                    
+                    if let result = testResult {
+                        Text(result)
+                            .foregroundColor(result.contains("成功") ? .green : .red)
+                    }
+                    
+                    if showLogWindow {
+                        VStack {
+                            Text("测试日志")
+                                .font(.headline)
+                            ScrollView {
+                                VStack(alignment: .leading) {
+                                    ForEach(logMessages, id: \.self) { message in
+                                        Text(message)
+                                    }
+                                }
+                            }
+                            .frame(height: 200)
+                            Button("关闭") {
+                                showLogWindow = false
+                            }
+                        }
+                        .padding()
+                        .background(Color(nsColor: .windowBackgroundColor))
+                        .cornerRadius(10)
+                    }
+                }
+            }
+        }
+        .padding()
+    }
+    
+    private func testConnection() {
+        isTesting = true
+        testResult = nil
+        logMessages.removeAll()
+        
+        Task {
+            do {
+                logMessages.append("开始测试连接...")
+                let uploader = GitHubUploader(config: viewModel.githubImageHost) 
+                // 参数类型已匹配 GitHubImageHost 结构体
+                guard let selectedImage = selectedTestImage,
+                      let cgImage = selectedImage.cgImage(forProposedRect: nil, context: nil, hints: nil),
+                      let bitmapRep = NSBitmapImageRep(cgImage: cgImage) as NSBitmapImageRep?,
+                      let imageData = bitmapRep.representation(using: .png, properties: [:]) else {
+                    testResult = "测试失败: 无法获取图片数据"
+                    isTesting = false
+                    return
+                }
+                
+                logMessages.append("正在上传图片...")
+                let fileName = "wenyan_test_\(UUID().uuidString).png"
+                if let imageUrl = try await uploader.upload(fileData: imageData, fileName: fileName, mimeType: "image/png") {
+                    logMessages.append("图片上传成功: \(fileName)")
+                    logMessages.append("图片URL: \(imageUrl)")
+                    testResult = "测试成功: 文件已上传到GitHub仓库"
+                } else {
+                    throw NSError(domain: "GitHubUploader", code: -3, userInfo: [NSLocalizedDescriptionKey: "上传成功但未返回有效URL"])
+                }
+            } catch {
+                logMessages.append("上传失败: \(error.localizedDescription)")
+                testResult = "测试失败: \(error.localizedDescription)"
+            }
+            isTesting = false
+            showLogWindow = true
+        }
+    }
+}
+
+class GitHubImageHostSettingsViewModel: ObservableObject {
+    @Published var githubImageHost: GitHubImageHost {
+        didSet {
+            saveSettings()
+        }
+    }
+    @Published var isEnabled: Bool = false {
+        didSet {
+            if isEnabled {
+                UserDefaults.standard.set(Settings.ImageHosts.github.id, forKey: "ebabledImageHost")
+            } else {
+                // Only clear if this was the active host
+                if UserDefaults.standard.string(forKey: "ebabledImageHost") == Settings.ImageHosts.github.id {
+                    UserDefaults.standard.set("", forKey: "ebabledImageHost")
+                }
+            }
+        }
+    }
+    private static let key = "githubImageHost"
+    
+    init() {
+        self.githubImageHost = Self.loadSettings() ?? GitHubImageHost()
+        let ebabledImageHost = UserDefaults.standard.string(forKey: "ebabledImageHost")
+        if let enabled = ebabledImageHost {
+            isEnabled = enabled == Settings.ImageHosts.github.id
+        }
+    }
+    
+    func saveSettings() {
+        if let encoded = try? JSONEncoder().encode(githubImageHost) {
+            UserDefaults.standard.set(encoded, forKey: Self.key)
+        }
+    }
+    
+
+    private static func loadSettings() -> GitHubImageHost? {
+        if let savedData = UserDefaults.standard.data(forKey: key),
+           let decoded = try? JSONDecoder().decode(GitHubImageHost.self, from: savedData) {
+            return decoded
+        }
+        return nil
     }
 }
 
@@ -161,7 +359,14 @@ class GzhImageHostSettingsViewModel: ObservableObject {
     }
     @Published var isEnabled: Bool = false {
         didSet {
-            saveEbabledImageHost()
+            if isEnabled {
+                UserDefaults.standard.set(Settings.ImageHosts.gzh.id, forKey: "ebabledImageHost")
+            } else {
+                // Only clear if this was the active host
+                if UserDefaults.standard.string(forKey: "ebabledImageHost") == Settings.ImageHosts.gzh.id {
+                    UserDefaults.standard.set("", forKey: "ebabledImageHost")
+                }
+            }
         }
     }
     private static let key = "gzhImageHost"
@@ -183,9 +388,6 @@ class GzhImageHostSettingsViewModel: ObservableObject {
         }
     }
     
-    private func saveEbabledImageHost() {
-        UserDefaults.standard.set(self.isEnabled ? Settings.ImageHosts.gzh.id : "", forKey: "ebabledImageHost")
-    }
 
     private static func loadSettings() -> GzhImageHost? {
         if let savedData = UserDefaults.standard.data(forKey: key),
